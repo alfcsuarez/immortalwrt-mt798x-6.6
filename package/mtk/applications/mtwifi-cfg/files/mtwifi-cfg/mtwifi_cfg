@@ -446,10 +446,16 @@ function mtwifi_cfg_setup(argv)
     -- default bw is 20MHz
     dats.HT_BW = 0
     dats.VHT_BW = 0
+    if is_be_mode(cfg) then
+        dats.EHT_ApBw = 0
+    end
 
     if bw == "40" then
         dats.HT_BW = 1
         dats.VHT_BW = 0
+        if is_be_mode(cfg) then
+            dats.EHT_ApBw = 1
+        end
         if cfg.config.noscan ~= nil and cfg.config.noscan == "1" then
             dats.HT_BSSCoexistence = 0
         else
@@ -458,9 +464,21 @@ function mtwifi_cfg_setup(argv)
     elseif bw == "80" then
         dats.HT_BW = 1
         dats.VHT_BW = 1
+        if is_be_mode(cfg) then
+            dats.EHT_ApBw = 2
+        end
     elseif bw == "160" then
         dats.HT_BW = 1
         dats.VHT_BW = 2
+        if is_be_mode(cfg) then
+            dats.EHT_ApBw = 3
+        end
+    elseif bw == "320" then
+        dats.HT_BW = 1
+        dats.VHT_BW = 2
+        if is_be_mode(cfg) then
+            dats.EHT_ApBw = 4
+        end
     end
 
     -- setup apcli

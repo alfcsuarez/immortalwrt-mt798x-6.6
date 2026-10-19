@@ -9,7 +9,11 @@ define Image/Prepare
 endef
 
 define Build/mt7988-bl2
-	cat $(STAGING_DIR_IMAGE)/mt7988-$1-bl2.img >> $@
+	if [ -f "$(TOPDIR)/target/linux/mediatek/image/preloader/mt7988-$1-bl2.bin" ]; then \
+		cat $(TOPDIR)/target/linux/mediatek/image/preloader/mt7988-$1-bl2.bin >> $@; \
+	else \
+		cat $(STAGING_DIR_IMAGE)/mt7988-$1-bl2.img >> $@; \
+	fi
 endef
 
 define Build/mt7988-bl31-uboot

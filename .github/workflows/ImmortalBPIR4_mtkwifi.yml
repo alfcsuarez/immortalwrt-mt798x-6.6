@@ -12,11 +12,11 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
 
@@ -68,7 +68,7 @@ jobs:
 
       - name: Upload build artifacts
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: BPI-R4-firmware
           path: ${{ env.FIRMWARE_DIR }}/
@@ -76,7 +76,7 @@ jobs:
 
       - name: Create release on success
         if: success()
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: ${{ env.FIRMWARE_DIR }}/*
           tag_name: bpi-r4-${{ github.run_number }}

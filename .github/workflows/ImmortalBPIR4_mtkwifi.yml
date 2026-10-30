@@ -6,9 +6,6 @@ on:
     branches:
       - mt798x-mt799x-6.6-mtwifi
       - medyma-6.6-mtwifi
-    paths:
-      - '.github/workflows/ImmortalBPIR4_mtkwifi.yml'
-      - 'defconfig/bpi-r4_custom.config'
 
 permissions:
   contents: write
@@ -41,6 +38,7 @@ jobs:
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+          [ -f ./scripts/mt7988-apply-feed-patches.sh ] && ./scripts/mt7988-apply-feed-patches.sh || true
 
       - name: Load BPI R4 custom config
         run: |

@@ -1,0 +1,129 @@
+
+config dnsmasq
+	option domainneeded '1'
+	option localise_queries '1'
+	option rebind_protection '1'
+	option rebind_localhost '1'
+	option local '/lan/'
+	option domain 'lan'
+	option expandhosts '1'
+	option min_cache_ttl '3600'
+	option use_stale_cache '3600'
+	option cachesize '8000'
+	option nonegcache '1'
+	option authoritative '1'
+	option readethers '1'
+	option leasefile '/tmp/dhcp.leases'
+	option resolvfile '/tmp/resolv.conf.d/resolv.conf.auto'
+	option localservice '1'
+	option dns_redirect '1'
+	option ednspacket_max '1232'
+	option port '54'
+
+config dhcp 'lan'
+	option interface 'lan'
+	option start '100'
+	option limit '150'
+	option leasetime '12h'
+	option dhcpv4 'server'
+	option ra 'server'
+	list ra_flags 'other-config'
+	option max_preferred_lifetime '2700'
+	option max_valid_lifetime '5400'
+	list dhcp_option '6,192.168.1.1'
+
+config dhcp 'wan'
+	option interface 'wan'
+	option ignore '1'
+
+config odhcpd 'odhcpd'
+	option maindhcp '0'
+	option leasefile '/tmp/hosts/odhcpd'
+	option leasetrigger '/usr/sbin/odhcpd-update'
+	option loglevel '4'
+
+config host
+	option name 'piranha'
+	option ip '192.168.1.100'
+	list mac '76:96:C0:B6:BE:B4'
+	option leasetime 'infinite'
+	list tag 'PC'
+
+config host
+	option name 'EPSON21C1D1'
+	list mac '50:57:9C:21:C1:D1'
+	option ip '192.168.1.102'
+	option leasetime 'infinite'
+	list tag 'Impresora'
+
+config host
+	option name 'Enrique'
+	list mac '6C:02:E0:4B:C4:41'
+	option ip '192.168.1.101'
+	option leasetime 'infinite'
+	list tag 'PC'
+
+config host
+	option name 'Harmony-Hub'
+	list mac '00:04:20:F7:8D:A7'
+	option ip '192.168.1.103'
+	option leasetime 'infinite'
+	list tag 'Domotica'
+
+config host
+	option name 'SonyTv'
+	list mac '0C:96:E6:27:91:B7'
+	option ip '192.168.1.104'
+	option leasetime 'infinite'
+	list tag 'TV'
+
+config host
+	option name 'LGwebOSTV'
+	list mac '00:51:ED:BD:35:36'
+	option ip '192.168.1.106'
+	list tag 'TV'
+
+config host
+	option name 'SharpTV'
+	list mac '28:7B:11:22:38:52'
+	option ip '192.168.1.107'
+	list tag 'TV'
+
+config host
+	option name 'Play5'
+	list mac '68:28:6C:1E:58:E0'
+	option ip '192.168.1.110'
+	option leasetime 'infinite'
+	list tag 'Consola'
+
+config host
+	option name 'homeassistant'
+	option ip '192.168.1.51'
+	list mac '02:B7:CA:C5:B9:EB'
+	option leasetime 'infinite'
+	list tag 'Host_Proxmox'
+
+config host
+	option name 'Plex-server'
+	option ip '192.168.1.52'
+	list tag 'Host_proxmox'
+	option leasetime 'infinite'
+	list mac 'BC:24:11:BB:37:EF'
+
+config host
+	option name 'Acestack'
+	option ip '192.168.1.53'
+	option leasetime 'infinite'
+	list tag 'Host_proxmox'
+	list mac 'BC:24:11:75:E7:35'
+
+config host
+	option name 'Proxmox'
+	list mac '30:56:0F:09:DA:40'
+	option ip '192.168.1.50'
+	option leasetime 'infinite'
+	list tag 'Host_proxmox'
+
+config dhcp 'wan6'
+	option interface 'wan6'
+

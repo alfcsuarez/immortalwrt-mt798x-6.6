@@ -1,0 +1,11 @@
+# Put your custom commands here that should be executed once
+# the system init finished. By default this file does nothing.
+
+# Esperar a que /opt esté montado y arrancar servicios que residen en /opt
+(
+  for i in $(seq 1 90); do mountpoint -q /opt && break; sleep 2; done
+  /etc/init.d/adguardhome restart
+  podman start uptime-kuma 2>/dev/null || podman run -d --name uptime-kuma --restart=always --net=host --cap-add=NET_RAW -v /opt/uptime-kuma/data:/app/data louislam/uptime-kuma:2
+) &
+
+exit 0

@@ -1,0 +1,11 @@
+config settings 'settings'
+	option log_stderr '1'
+	option log_stdout '1'
+	option port '41641'
+	option state_file '/etc/tailscale/tailscaled.state'
+	# default to using nftables - change below to 'iptables' if still using iptables
+	option fw_mode 'nftables'
+	 # Rutas de subred que anunciar (tu red local)
+   	 option advertise_routes '192.168.1.0/24'
+    	# Aceptar rutas de otros nodos (necesario si quieres acceder a otras subredes)
+    	option accept_routes '1'

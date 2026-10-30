@@ -1,0 +1,8 @@
+
+config adguardhome 'config'
+	option enabled '1'
+	option config '/etc/adguardhome.yaml'
+	option workdir '/opt/adguardhome'
+	option pidfile '/run/adguardhome.pid'
+	option work_dir '/opt/adguardhome'
+

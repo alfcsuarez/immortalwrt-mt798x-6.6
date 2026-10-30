@@ -1,0 +1,20 @@
+
+config ddns 'global'
+	option ddns_dateformat '%F %R'
+	option ddns_loglines '250'
+	option ddns_rundir '/var/run/ddns'
+	option ddns_logdir '/var/log/ddns'
+
+config service 'Piranha_duckdns'
+	option service_name 'duckdns.org'
+	option use_ipv6 '0'
+	option enabled '1'
+	option lookup_host 'piranha.duckdns.org'
+	option domain 'piranha'
+	option username 'token'
+	option password '5d4f1ecb-6083-4a9e-b9f4-c1a3f86bb05e'
+	option ip_source 'network'
+	option ip_network 'wan'
+	option interface 'wan'
+	option use_syslog '2'
+

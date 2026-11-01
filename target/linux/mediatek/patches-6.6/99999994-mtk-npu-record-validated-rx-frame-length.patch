@@ -1,0 +1,29 @@
+From: Codex <codex@openai.com>
+Subject: [PATCH] net: mediatek: retain length of validated TOPS RX frames
+
+Capture the decoded frame length after an skb exists and before the registered
+TOPS provider validates the firmware reason and live tunnel generation. This
+allows that provider to count real CPU returns without guessing a firmware
+statistics memory layout or treating setup events as hardware packet counters.
+
+--- a/include/linux/mtk_npu_rx.h
++++ b/include/linux/mtk_npu_rx.h
+@@ -8,6 +8,8 @@
+ struct mtk_npu_rx_meta {
+ 	u64 provider, generation, allocation;
+ 	u32 entry, tunnel_ifindex;
++	/* Bytes in this decoded DMA frame; not a firmware lifetime counter. */
++	u32 rx_frame_len;
+ };
+ 
+ static inline const struct mtk_npu_rx_meta *
+--- a/drivers/net/ethernet/mediatek/mtk_eth_soc.c
++++ b/drivers/net/ethernet/mediatek/mtk_eth_soc.c
+@@ -2678,6 +2678,7 @@
+ 		tops_reason = mtk_is_netsys_v3_or_greater(eth) ? trxd.rxd6 >> 24 : 0;
+ 		if (tops_reason >= MTK_TOPS_RX_TUNNEL_FIRST &&
+ 		    tops_reason <= MTK_TOPS_RX_TUNNEL_LAST) {
++			tnl_meta.rx_frame_len = skb->len;
+ 			tnl_dev = mtk_tnl_rx_dev_get(tops_reason, &tnl_meta);
+ 			if (!tnl_dev || !netif_running(tnl_dev)) {
+ 				if (tnl_dev)

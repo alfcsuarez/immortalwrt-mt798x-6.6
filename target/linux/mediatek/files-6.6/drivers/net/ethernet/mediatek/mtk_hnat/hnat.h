@@ -1362,6 +1362,7 @@ static inline bool hnat_dsa_is_enable(struct mtk_hnat *priv)
 
 void hnat_deinit_debugfs(struct mtk_hnat *h);
 int hnat_init_debugfs(struct mtk_hnat *h);
+void hnat_tunnel_events_show(struct seq_file *s);
 int hnat_register_nf_hooks(void);
 void hnat_unregister_nf_hooks(void);
 int whnat_adjust_nf_hooks(void);

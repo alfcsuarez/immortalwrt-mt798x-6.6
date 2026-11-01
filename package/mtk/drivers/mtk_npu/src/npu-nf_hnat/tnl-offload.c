@@ -52,32 +52,36 @@ static struct npu_nf_hnat_statistic hnat_ts;
 
 static inline void inc_tnl_hnat_decap_offloadable_statistic_success(void)
 {
-	hnat_ts.decap_offloadable.success++;
+	atomic64_inc(&hnat_ts.decap_offloadable.success);
 }
 
 static inline void inc_tnl_hnat_decap_offloadable_statistic_fail(void)
 {
-	hnat_ts.decap_offloadable.fail++;
-}
-
-static inline void inc_tnl_hnat_decap_offload_statistic_success(void)
-{
-	hnat_ts.decap_offload.success++;
+	atomic64_inc(&hnat_ts.decap_offloadable.fail);
 }
 
 static inline void inc_tnl_hnat_decap_offload_statistic_fail(void)
 {
-	hnat_ts.decap_offload.fail++;
-}
-
-static inline void inc_tnl_hnat_encap_offload_statistic_success(void)
-{
-	hnat_ts.encap_offload.success++;
+	atomic64_inc(&hnat_ts.decap_offload.fail);
 }
 
 static inline void inc_tnl_hnat_encap_offload_statistic_fail(void)
 {
-	hnat_ts.encap_offload.fail++;
+	atomic64_inc(&hnat_ts.encap_offload.fail);
+}
+
+static void mtk_npu_hnat_setup_result(struct npu_nf_hnat_statistic_counter *counter,
+				    int ret)
+{
+	/* Learning queues a firmware update before any PPE publication. Those
+	 * packets intentionally fall back until the ACK; this is not a FW error.
+	 */
+	if (ret == -EAGAIN)
+		atomic64_inc(&counter->pending_sync);
+	else if (ret)
+		atomic64_inc(&counter->fail);
+	else
+		atomic64_inc(&counter->success);
 }
 
 static inline void skb_set_npu_tnl_idx(struct sk_buff *skb, u32 tnl_idx)
@@ -528,8 +532,7 @@ static int mtk_npu_tnl_decap_offload(struct sk_buff *skb)
 	skb_hnat_tops(skb) = 0;
 	skb_hnat_is_decap(skb) = 0;
 
-	(ret == 0 ? inc_tnl_hnat_decap_offload_statistic_success() :
-		    inc_tnl_hnat_decap_offload_statistic_fail());
+	mtk_npu_hnat_setup_result(&hnat_ts.decap_offload, ret);
 
 	return ret;
 }
@@ -635,8 +638,7 @@ static int mtk_npu_tnl_encap_offload(struct sk_buff *skb, struct ethhdr *eth,
 	if (!ret)
 		token->index = skb_hnat_tops(skb) - __NPU_TUNNEL_TYPE_MAX;
 
-	(ret == 0 ? inc_tnl_hnat_encap_offload_statistic_success() :
-		    inc_tnl_hnat_encap_offload_statistic_fail());
+	mtk_npu_hnat_setup_result(&hnat_ts.encap_offload, ret);
 
 	return ret;
 }
@@ -672,6 +674,7 @@ static struct net_device *mtk_npu_get_tnl_dev(u8 reason, struct mtk_npu_rx_meta 
 		meta->tunnel_ifindex = dev->ifindex;
 		meta->generation = info->generation;
 		meta->allocation = info->allocation_cookie;
+		npu_tnl_record_rx_no_lock(info, meta->rx_frame_len);
 		dev_hold(dev);
 	}
 	spin_unlock_irqrestore(&info->lock, flags);
@@ -902,17 +905,32 @@ void mtk_npu_nf_hnat_tnl_offload_deinit(void)
 void mtk_npu_nf_hnat_statistic_show(struct seq_file *s)
 {
 	seq_puts(s, "unit=host_eligibility_and_setup_events; not_hardware_bytes_or_forwarding_proof\n");
-	seq_printf(s, "decap offloadable|success: %llu|fail: %llu|\n",
-		   hnat_ts.decap_offloadable.success, hnat_ts.decap_offloadable.fail);
-	seq_printf(s, "decap offload    |success: %llu|fail: %llu|\n",
-		   hnat_ts.decap_offload.success, hnat_ts.decap_offload.fail);
-	seq_printf(s, "encap offload    |success: %llu|fail: %llu|\n",
-		   hnat_ts.encap_offload.success, hnat_ts.encap_offload.fail);
+	seq_printf(s, "decap offloadable|success: %lld|fail: %lld|\n",
+		   atomic64_read(&hnat_ts.decap_offloadable.success),
+		   atomic64_read(&hnat_ts.decap_offloadable.fail));
+	seq_printf(s, "decap offload    |success: %lld|fail: %lld|pending_sync: %lld|\n",
+		   atomic64_read(&hnat_ts.decap_offload.success),
+		   atomic64_read(&hnat_ts.decap_offload.fail),
+		   atomic64_read(&hnat_ts.decap_offload.pending_sync));
+	seq_printf(s, "encap offload    |success: %lld|fail: %lld|pending_sync: %lld|\n",
+		   atomic64_read(&hnat_ts.encap_offload.success),
+		   atomic64_read(&hnat_ts.encap_offload.fail),
+		   atomic64_read(&hnat_ts.encap_offload.pending_sync));
 }
 
 void mtk_npu_nf_hnat_statistic_clear(void)
 {
-	memset(&hnat_ts, 0, sizeof(struct npu_nf_hnat_statistic));
+	struct npu_nf_hnat_statistic_counter *counters[] = {
+		&hnat_ts.decap_offloadable, &hnat_ts.decap_offload,
+		&hnat_ts.encap_offload,
+	};
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(counters); i++) {
+		atomic64_set(&counters[i]->success, 0);
+		atomic64_set(&counters[i]->fail, 0);
+		atomic64_set(&counters[i]->pending_sync, 0);
+	}
 }
 
 void mtk_npu_nf_hnat_statistic_enable(bool en)

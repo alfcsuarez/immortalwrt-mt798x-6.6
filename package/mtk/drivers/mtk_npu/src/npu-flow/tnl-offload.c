@@ -312,6 +312,7 @@ static struct net_device *flow_rx_dev(u8 reason, struct mtk_npu_rx_meta *meta)
 		meta->tunnel_ifindex = dev->ifindex;
 		meta->generation = info->generation;
 		meta->allocation = info->allocation_cookie;
+		npu_tnl_record_rx_no_lock(info, meta->rx_frame_len);
 		dev_hold(dev);
 	}
 	spin_unlock_irqrestore(&info->lock, flags);

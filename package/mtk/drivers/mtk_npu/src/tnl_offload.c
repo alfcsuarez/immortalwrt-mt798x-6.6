@@ -599,6 +599,9 @@ mtk_npu_tnl_info_alloc_no_lock(struct npu_tnl_type *tnl_type)
 	tnl_info->sync_failures = 0;
 	tnl_info->sync_target_generation = 0;
 	tnl_info->synced_generation = 0;
+	tnl_info->rx_generation = 0;
+	tnl_info->rx_packets = 0;
+	tnl_info->rx_frame_bytes = 0;
 	tnl_info->last_sync_error = 0;
 	tnl_info->sync_stage = NPU_TNL_SYNC_IDLE;
 

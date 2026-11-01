@@ -17,6 +17,7 @@
 #include <linux/netfilter_ipv6.h>
 #include <linux/of.h>
 #include <linux/if_vlan.h>
+#include <linux/if_bridge.h>
 #include <net/arp.h>
 #include <net/neighbour.h>
 #include <net/netfilter/nf_conntrack_helper.h>
@@ -60,6 +61,45 @@ extern struct net_device *ppd_dev;
 static struct ipv6hdr mape_l2w_v6h;
 static struct ipv6hdr mape_w2l_v6h;
 static u16 ext_vlan=0;
+
+enum hnat_tunnel_event {
+	TNL_OUTER_SEEN,
+	TNL_OUTER_IDENTITY_REJECT,
+	TNL_OUTER_NEIGH_MISS,
+	TNL_OUTER_PATH_REJECT,
+	TNL_OUTER_TOPOLOGY_REJECT,
+	TNL_SHADOW_MISS,
+	TNL_INNER_IDENTITY_REJECT,
+	TNL_SYNC_PENDING,
+	TNL_SETUP_ERROR,
+	TNL_LEASE_REJECT,
+	TNL_PUBLISH_REJECT,
+	TNL_ENCAP_BOUND,
+	TNL_EVENT_MAX,
+};
+
+static atomic64_t hnat_tunnel_events[TNL_EVENT_MAX];
+
+void hnat_tunnel_events_show(struct seq_file *s)
+{
+	static const char * const names[] = {
+		"outer_seen", "outer_identity_reject", "outer_neigh_miss",
+		"outer_path_reject", "outer_topology_reject", "shadow_miss",
+		"inner_identity_reject", "sync_pending", "setup_error",
+		"lease_reject", "publish_reject", "encap_bound",
+	};
+	unsigned int i;
+
+	seq_puts(s, "unit=host_encap_learning_events; not_hardware_packet_counters\n");
+	for (i = 0; i < ARRAY_SIZE(names); i++)
+		seq_printf(s, "%s %lld\n", names[i],
+			   atomic64_read(&hnat_tunnel_events[i]));
+}
+
+static void hnat_tunnel_event(enum hnat_tunnel_event event)
+{
+	atomic64_inc(&hnat_tunnel_events[event]);
+}
 static inline uint8_t get_wifi_hook_if_index_from_dev(const struct net_device *dev)
 {
 	int i;
@@ -1261,11 +1301,28 @@ static bool hnat_tunnel_pre_route(struct sk_buff *skb)
 	return false;
 }
 
+static bool hnat_tunnel_rx_current(struct sk_buff *skb,
+				   const struct net_device *dev)
+{
+#if defined(CONFIG_MEDIATEK_NETSYS_V3)
+	const struct mtk_npu_rx_meta *rx = mtk_npu_rx_meta_find(skb);
+	struct hnat_tunnel_token token = {};
+
+	if (!rx || rx->tunnel_ifindex != (u32)dev->ifindex ||
+	    !hnat_tunnel_rx_bind_lock(rx, &token))
+		return false;
+	hnat_tunnel_bind_unlock(&token);
+	return true;
+#else
+	return false;
+#endif
+}
+
 static unsigned int
 mtk_hnat_ipv4_nf_pre_routing(void *priv, struct sk_buff *skb,
 			     const struct nf_hook_state *state)
 {
-	struct flow_offload_hw_path hw_path;
+	struct flow_offload_hw_path hw_path = {};
 
 	if (!skb)
 		goto drop;
@@ -1302,14 +1359,15 @@ mtk_hnat_ipv4_nf_pre_routing(void *priv, struct sk_buff *skb,
 
 	/*
 	 * Avoid mistakenly binding of outer IP, ports in SW L2TP decap flow.
-	 * In pre-routing, if dev is virtual iface, TOPS module is not loaded,
-	 * and it's L2TP flow, then do not bind.
+	 * A software-decapped packet still carries the outer flow's PPE slot.
+	 * A validated TOPS DMA return instead has an inner hardware key and
+	 * may learn HNAT/WHNAT; publication takes the tunnel lease again.
 	 */
 	if (skb_hnat_iface(skb) == FOE_MAGIC_GE_VIRTUAL
 	    && skb->dev->netdev_ops->ndo_flow_offload_check) {
-		skb->dev->netdev_ops->ndo_flow_offload_check(&hw_path);
-
-		if (hw_path.flags & BIT(DEV_PATH_TNL))
+		if (skb->dev->netdev_ops->ndo_flow_offload_check(&hw_path) ||
+		    ((hw_path.flags & BIT(DEV_PATH_TNL)) &&
+		     !hnat_tunnel_rx_current(skb, state->in)))
 			skb_hnat_alg(skb) = 1;
 	}
 
@@ -4043,9 +4101,41 @@ static bool hnat_tunnel_outer_neighbour(struct sk_buff *skb,
 	return valid;
 }
 
-/* One 802.1Q tag and/or a connected PPPoE channel, resolved by native ndo
- * callbacks to an actual MT7988 MAC. Do not cast a virtual netdev's private
- * storage to mtk_mac, or silently flatten QinQ/DSA/bridge paths.
+/* A bridge used as a WAN L3 endpoint is supported only with one direct,
+ * forwarding MAC port and no VLAN filtering. Native ndo resolution supplies
+ * that port from the real neighbour MAC/FDB; never guess it from an ifname.
+ * Multiport bridges need FDB-move retirement before they can be cached.
+ */
+static bool hnat_tunnel_bridge_path(const struct net_device *underlay,
+				    const struct flow_offload_hw_path *path)
+{
+	struct net_device *bridge = (struct net_device *)underlay;
+	struct net_device *lower;
+	struct list_head *iter;
+	unsigned int ports = 0;
+	bool valid = true;
+
+	if (!netif_is_bridge_master(underlay))
+		return true;
+	if (br_vlan_enabled(underlay) ||
+	    path->flags != BIT(DEV_PATH_ETHERNET) ||
+	    path->virt_dev != underlay)
+		return false;
+	rcu_read_lock();
+	iter = &bridge->adj_list.lower;
+	while ((lower = netdev_next_lower_dev_rcu(bridge, &iter))) {
+		ports++;
+		if (lower != path->dev ||
+		    br_port_get_stp_state(lower) != BR_STATE_FORWARDING)
+			valid = false;
+	}
+	rcu_read_unlock();
+	return valid && ports == 1;
+}
+
+/* One 802.1Q tag and/or a connected PPPoE channel, or the bridge above,
+ * resolved by native ndo callbacks to an actual MT7988 MAC. Do not cast
+ * virtual netdev private storage to mtk_mac or flatten QinQ/DSA paths.
  */
 static bool hnat_tunnel_outer_path(const struct sk_buff *skb,
 				   const struct net_device *underlay,
@@ -4058,7 +4148,8 @@ static bool hnat_tunnel_outer_path(const struct sk_buff *skb,
 	if (!path->dev || path->flags & ~flags ||
 	    !hnat_tunnel_eth_mac(path->dev) || netdev_uses_dsa(path->dev) ||
 	    !netif_running(underlay) || !netif_running(path->dev) ||
-	    dev_net(underlay) != &init_net || dev_net(path->dev) != &init_net)
+	    dev_net(underlay) != &init_net || dev_net(path->dev) != &init_net ||
+	    !hnat_tunnel_bridge_path(underlay, path))
 		return false;
 	if (path->flags & BIT(DEV_PATH_VLAN)) {
 		if (path->vlan_proto != htons(ETH_P_8021Q) ||
@@ -4109,12 +4200,18 @@ static void hnat_tunnel_confirm(struct sk_buff *skb, const struct net_device *ou
 	u32 ppe = skb_hnat_ppe(skb), slot = skb_hnat_entry(skb);
 	u8 ctinfo = 0;
 	bool handled, accepted = false;
+	int ret;
 
-	if (!hnat_tunnel_outer_path(skb, out, path, &token) ||
-	    !is_hnat_info_filled(skb) || ppe >= CFG_PPE_NUM || ppe >= MAX_PPE_NUM ||
-	    slot >= hnat_priv->foe_etry_num || !hnat_priv->foe_table_cpu[ppe] ||
-	    skb_hnat_reason(skb) != HIT_UNBIND_RATE_REACH)
+	if (!hnat_tunnel_outer_path(skb, out, path, &token)) {
+		hnat_tunnel_event(TNL_OUTER_TOPOLOGY_REJECT);
 		goto reject;
+	}
+	if (!is_hnat_info_filled(skb) || ppe >= CFG_PPE_NUM || ppe >= MAX_PPE_NUM ||
+	    slot >= hnat_priv->foe_etry_num || !hnat_priv->foe_table_cpu[ppe] ||
+	    skb_hnat_reason(skb) != HIT_UNBIND_RATE_REACH) {
+		hnat_tunnel_event(TNL_OUTER_IDENTITY_REJECT);
+		goto reject;
+	}
 	mac = hnat_tunnel_eth_mac(path->dev);
 	if (hnat_priv->data->per_flow_accounting &&
 	    !hnat_account_generation_snapshot(hnat_priv, ppe, slot, &generation))
@@ -4126,6 +4223,7 @@ static void hnat_tunnel_confirm(struct sk_buff *skb, const struct net_device *ou
 	    time_after_eq(jiffies, flow->last_update + 3 * HZ) ||
 	    !hnat_flow_entry_unbind_match(&flow->data, live)) {
 		spin_unlock_bh(&hnat_priv->flow_entry_lock);
+		hnat_tunnel_event(TNL_SHADOW_MISS);
 		goto reject;
 	}
 	entry = flow->data;
@@ -4138,14 +4236,22 @@ static void hnat_tunnel_confirm(struct sk_buff *skb, const struct net_device *ou
 		nf_conntrack_get(&ct->ct_general);
 	spin_unlock_bh(&hnat_priv->flow_entry_lock);
 	if (!hnat_tunnel_inner_match(skb, &entry) ||
-	    !hnat_flow_ipv4_ct_match(NULL, &entry, ct, ctinfo))
+	    !hnat_flow_ipv4_ct_match(NULL, &entry, ct, ctinfo)) {
+		hnat_tunnel_event(TNL_INNER_IDENTITY_REJECT);
 		goto put;
+	}
 	ether_addr_copy(eth.h_dest, path->eth_dest);
 	ether_addr_copy(eth.h_source, path->eth_src);
-	if (hnat_tunnel_encap_offload(skb, &eth, tunnel_dev, &token) ||
-	    skb_hnat_tops(skb) != token.index + 32 ||
-	    !hnat_tunnel_bind_lock(tunnel_dev, &token))
+	ret = hnat_tunnel_encap_offload(skb, &eth, tunnel_dev, &token);
+	if (ret) {
+		hnat_tunnel_event(ret == -EAGAIN ? TNL_SYNC_PENDING : TNL_SETUP_ERROR);
 		goto put;
+	}
+	if (skb_hnat_tops(skb) != token.index + 32 ||
+	    !hnat_tunnel_bind_lock(tunnel_dev, &token)) {
+		hnat_tunnel_event(TNL_LEASE_REJECT);
+		goto put;
+	}
 	/* No NPU callback/lock is acquired inside entry_lock. Keep the tunnel
 	 * lease held until the actual descriptor publication has finished.
 	 */
@@ -4176,8 +4282,12 @@ static void hnat_tunnel_confirm(struct sk_buff *skb, const struct net_device *ou
 		dma_wmb();
 		accepted = true;
 	}
-	if (accepted)
+	if (accepted) {
+		hnat_tunnel_event(TNL_ENCAP_BOUND);
 		hnat_flow_entry_delete(flow);
+	} else {
+		hnat_tunnel_event(TNL_PUBLISH_REJECT);
+	}
 flow_unlock:
 	spin_unlock_bh(&hnat_priv->flow_entry_lock);
 entry_unlock:
@@ -4225,6 +4335,9 @@ static unsigned int mtk_hnat_nf_post_routing(
 	const struct net_device *arp_dev = out;
 	const struct net_device *route_out = out;
 	int path_err = 0;
+#if defined(CONFIG_MEDIATEK_NETSYS_V3)
+	bool tunnel_outer = false;
+#endif
 
 #if defined(CONFIG_MEDIATEK_NETSYS_V3)
 	if (hnat_mcast_unshare(skb))
@@ -4263,13 +4376,39 @@ static unsigned int mtk_hnat_nf_post_routing(
 	if (unlikely(skb->mark == HNAT_EXCEPTION_TAG))
 		return 0;
 
+#if defined(CONFIG_MEDIATEK_NETSYS_V3)
+	tunnel_outer = skb_hnat_tops(skb) && is_hnat_info_filled(skb);
+	if (tunnel_outer) {
+		hnat_tunnel_event(TNL_OUTER_SEEN);
+		if (!hnat_tunnel_pending_outer(skb)) {
+			hnat_tunnel_event(TNL_OUTER_IDENTITY_REJECT);
+			return 0;
+		}
+		/* br_flow_offload_check needs ETH + the OUTER destination MAC
+		 * before it can resolve a physical port through the bridge FDB.
+		 * The skb MAC header can still describe the inner VXLAN frame.
+		 */
+		if (netif_is_bridge_master(route_out)) {
+			if (!hnat_tunnel_outer_neighbour(skb, route_out, &hw_path)) {
+				hnat_tunnel_event(TNL_OUTER_NEIGH_MISS);
+				return 0;
+			}
+			hw_path.flags |= BIT(DEV_PATH_ETHERNET);
+		}
+	}
+#endif
 	if (out->netdev_ops->ndo_flow_offload_check) {
 		path_err = out->netdev_ops->ndo_flow_offload_check(&hw_path);
 		/* A failed/partial resolution cannot supply a device or hardware
 		 * action for publication. Leave this packet on its software path.
 		 */
-		if (path_err || !hw_path.dev || !hw_path.virt_dev)
+		if (path_err || !hw_path.dev || !hw_path.virt_dev) {
+#if defined(CONFIG_MEDIATEK_NETSYS_V3)
+			if (tunnel_outer)
+				hnat_tunnel_event(TNL_OUTER_PATH_REJECT);
+#endif
 			return 0;
+		}
 		out = (IS_GMAC1_MODE) ? hw_path.virt_dev : hw_path.dev;
 	}
 
@@ -4295,10 +4434,11 @@ static unsigned int mtk_hnat_nf_post_routing(
 		}
 		skb_hnat_tops(skb) = hw_path.tnl_type + 1;
 		skb_hnat_is_decap(skb) = 0;
-	} else if (skb_hnat_tops(skb) && is_hnat_info_filled(skb)) {
-		if (path_err || !hnat_tunnel_pending_outer(skb) ||
-		    !hnat_tunnel_outer_neighbour(skb, route_out, &hw_path))
+	} else if (tunnel_outer) {
+		if (!hnat_tunnel_outer_neighbour(skb, route_out, &hw_path)) {
+			hnat_tunnel_event(TNL_OUTER_NEIGH_MISS);
 			return 0;
+		}
 		hnat_tunnel_confirm(skb, route_out, &hw_path);
 		return 0;
 	}

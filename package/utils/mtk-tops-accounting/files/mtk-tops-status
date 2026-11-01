@@ -226,8 +226,22 @@ synced_count=0
 invalid_count=0
 seen_indices=' '
 health_index=
+crypto_index=
 while read -r ti tg tif tt tp ts tsp td tdp te tde tsy extra; do
 	case "$ti:$tg" in
+		'#:crypto')
+			[ -z "$crypto_index" ] || invalid_count=$((invalid_count + 1))
+			crypto_index=
+			if [ -z "$ts$tsp$td$tdp$te$tde$tsy$extra" ] && valid_uint "$tif" 31 &&
+			   valid_generation "$tt" && valid_uint "$tp" 255; then
+				crypto_index=$tif
+				crypto_generation=$tt
+				crypto_context=$tp
+			else
+				invalid_count=$((invalid_count + 1))
+			fi
+			continue
+			;;
 		'#:sync')
 			# Optional metadata comment, immediately preceding its data row.
 			# Join only the same index/generation from that per-entry snapshot.
@@ -268,6 +282,7 @@ while read -r ti tg tif tt tp ts tsp td tdp te tde tsy extra; do
 	if [ "$valid" != 1 ]; then
 		invalid_count=$((invalid_count + 1))
 		health_index=
+		crypto_index=
 		continue
 	fi
 	seen_indices="$seen_indices$ti "
@@ -286,6 +301,14 @@ while read -r ti tg tif tt tp ts tsp td tdp te tde tsy extra; do
 	json_add_boolean encapsulation "$te"
 	json_add_boolean decapsulation "$tde"
 	json_add_boolean synchronized "$tsy"
+	if [ -n "$crypto_index" ]; then
+		if [ "$crypto_index:$crypto_generation" = "$ti:$tg" ]; then
+			json_add_int cdrt_index "$crypto_context"
+		else
+			invalid_count=$((invalid_count + 1))
+		fi
+		crypto_index=
+	fi
 	if [ -n "$health_index" ]; then
 		if [ "$health_index:$health_generation" = "$ti:$tg" ]; then
 			json_add_object sync_health
@@ -306,12 +329,63 @@ done <<EOF
 $tunnel_text
 EOF
 [ -z "$health_index" ] || invalid_count=$((invalid_count + 1))
+[ -z "$crypto_index" ] || invalid_count=$((invalid_count + 1))
 json_close_array
 [ "$invalid_count" -eq 0 ] || tunnel_coverage=invalid_entries
 json_add_string coverage "$tunnel_coverage"
 json_add_int count "$tunnel_count"
 json_add_int synchronized_count "$synced_count"
 json_add_int invalid_entries "$invalid_count"
+json_close_object
+# Only validated NPU DMA tunnel returns are counted here. Packets that stay
+# in PPE/NPU never reach this callback, so this is deliberately not a total
+# offloaded byte counter or a WAN throughput source. Preserve u64s as strings.
+dataplane_text=
+if bounded_read /proc/npu/dataplane 8192; then
+	dataplane_text=$READ_VALUE
+fi
+dataplane_coverage=$READ_COVERAGE
+if [ "$dataplane_coverage" = complete ]; then
+	IFS= read -r dataplane_schema <<EOF
+$dataplane_text
+EOF
+	if [ "$dataplane_schema" != '# schema=1 source=rx_dma_tunnel_reason coverage=cpu_returns unit=inner_frame_bytes' ]; then
+		dataplane_coverage=unsupported_schema
+		dataplane_text=
+	fi
+fi
+json_add_object dataplane
+json_add_int schema 1
+json_add_string source rx_dma_tunnel_reason
+json_add_string coverage cpu_returns
+json_add_string unit inner_frame_bytes
+json_add_boolean complete_hardware_totals 0
+json_add_array entries
+dataplane_seen=' '
+dataplane_invalid=0
+while read -r di dg dif dp db extra; do
+	case "$di" in ''|\#*) continue ;; esac
+	if [ -n "$extra" ] || ! valid_uint "$di" 31 ||
+	   ! valid_generation "$dg" || ! valid_uint "$dif" 2147483647 ||
+	   ! valid_generation "$dp" || ! valid_generation "$db"; then
+		dataplane_invalid=$((dataplane_invalid + 1))
+		continue
+	fi
+	case "$dataplane_seen" in *" $di "*) dataplane_invalid=$((dataplane_invalid + 1)); continue ;; esac
+	dataplane_seen="$dataplane_seen$di "
+	json_add_object
+	json_add_int index "$di"
+	json_add_string generation "$dg"
+	json_add_int ifindex "$dif"
+	json_add_string rx_packets "$dp"
+	json_add_string rx_bytes "$db"
+	json_close_object
+done <<EOF
+$dataplane_text
+EOF
+json_close_array
+[ "$dataplane_invalid" -eq 0 ] || dataplane_coverage=invalid_entries
+json_add_string read_coverage "$dataplane_coverage"
 json_close_object
 json_add_object accounting
 json_add_boolean conntrack_accounting_enabled "$ct_acct"

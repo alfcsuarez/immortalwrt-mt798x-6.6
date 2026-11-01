@@ -9,10 +9,12 @@
 #define _NPU_NF_HNAT_TNL_STATISTIC_H_
 
 #include <linux/types.h>
+#include <linux/atomic.h>
 
 struct npu_nf_hnat_statistic_counter {
-	u64 success;
-	u64 fail;
+	atomic64_t success;
+	atomic64_t fail;
+	atomic64_t pending_sync;
 };
 
 struct npu_nf_hnat_statistic {

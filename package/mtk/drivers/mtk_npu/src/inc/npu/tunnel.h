@@ -147,6 +147,8 @@ struct npu_tnl_info {
 	u64 generation;
 	u64 sync_attempts, sync_failures;
 	u64 sync_target_generation, synced_generation;
+	/* Validated TOPS RX DMA returns, not all packets forwarded in hardware. */
+	u64 rx_generation, rx_packets, rx_frame_bytes;
 	int last_sync_error;
 	u8 sync_stage;
 	spinlock_t lock;
@@ -154,6 +156,20 @@ struct npu_tnl_info {
 	u32 status;
 	u32 flag; /* bit: enum npu_tnl_info_flag */
 } __aligned(16);
+
+static inline void npu_tnl_record_rx_no_lock(struct npu_tnl_info *info, u32 bytes)
+{
+	lockdep_assert_held(&info->lock);
+	if (!bytes)
+		return;
+	if (info->rx_generation != info->generation) {
+		info->rx_generation = info->generation;
+		info->rx_packets = 0;
+		info->rx_frame_bytes = 0;
+	}
+	info->rx_packets++;
+	info->rx_frame_bytes += bytes;
+}
 
 /*
  * tnl_l2_param_update:

@@ -3153,6 +3153,13 @@ DEFINE_SHOW_ATTRIBUTE(hnat_fallback);
 
 DEFINE_SHOW_ATTRIBUTE(hnat_account);
 
+static int hnat_tunnel_show(struct seq_file *s, void *private)
+{
+	hnat_tunnel_events_show(s);
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(hnat_tunnel);
+
 int hnat_init_debugfs(struct mtk_hnat *h)
 {
 	int ret = 0;
@@ -3190,6 +3197,7 @@ int hnat_init_debugfs(struct mtk_hnat *h)
 
 	debugfs_create_file("all_entry", 0444, root, h, &hnat_debug_fops);
 	debugfs_create_file("accounting", 0444, root, h, &hnat_account_fops);
+	debugfs_create_file("tunnel_events", 0444, root, h, &hnat_tunnel_fops);
 	debugfs_create_file("fallback_stats", 0444, root, h, &hnat_fallback_fops);
 	debugfs_create_file("external_interface", 0444, root, h,
 			    &hnat_ext_fops);
